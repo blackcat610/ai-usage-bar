@@ -103,14 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             return
         }
         let view = ClaudeLoginView(provider: store.claudeProvider,
-                                   done: { [weak self] in
-                                       self?.store.refresh()
-                                       DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.loginWindow?.close() }
-                                   },
+                                   done: { [weak self] in self?.store.refresh() },
                                    close: { [weak self] in self?.loginWindow?.close() })
         let host = NSHostingController(rootView: view)
         let w = NSWindow(contentViewController: host)
-        w.title = L.s("Claude 로그인", "Claude sign-in")
+        w.title = L.s("Claude 인증 설정", "Claude sign-in settings")
         w.styleMask = [.titled, .closable]
         w.isReleasedWhenClosed = false
         w.level = .floating

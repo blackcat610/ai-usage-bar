@@ -7,6 +7,12 @@ enum Settings {
     }
     private static func set(_ key: String, _ v: Bool) { UserDefaults.standard.set(v, forKey: key) }
 
+    /// Which Claude credential source to use: "auto" (CLI first), "cli", "cliFile", "own".
+    static var claudeSource: String {
+        get { UserDefaults.standard.string(forKey: "claudeSource") ?? "auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "claudeSource") }
+    }
+
     /// Which providers to show (and poll).
     static var showClaude: Bool { get { flag("showClaude", default: true) } set { set("showClaude", newValue) } }
     static var showCodex: Bool { get { flag("showCodex", default: true) } set { set("showCodex", newValue) } }

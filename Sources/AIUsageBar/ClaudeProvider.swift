@@ -53,7 +53,36 @@ final class ClaudeProvider {
         }
     }
 
-    private enum Source { case own, cli, cliFile }
+    enum Source: String, CaseIterable { case cli, cliFile, own }
+
+    /// What the settings window shows for each source.
+    struct SourceInfo: Identifiable, Equatable {
+        let source: Source
+        let available: Bool
+        let detail: String
+        var id: String { source.rawValue }
+    }
+
+    /// Probe every source (keychain/file reads; call off the main thread).
+    static func probeSources() -> [SourceInfo] {
+        func describe(_ json: [String: Any]?) -> (Bool, String) {
+            guard let json, let c = Creds(json: json) else { return (false, L.s("없음", "not found")) }
+            let exp = Date(timeIntervalSince1970: c.expiresAtMs / 1000)
+            var parts: [String] = []
+            if let plan = planLabel(c) { parts.append(plan) }
+            parts.append(c.isExpired ? L.s("만료됨 · 사용 시 자동 갱신", "expired · refreshed on use")
+                                     : L.s("\(Fmt.clock(exp))까지 유효", "valid until \(Fmt.clock(exp))"))
+            return (true, parts.joined(separator: " · "))
+        }
+        let cli = describe(loadCLIJSON()?["claudeAiOauth"] as? [String: Any])
+        let file = describe(loadCLIFileJSON()?["claudeAiOauth"] as? [String: Any])
+        let own = describe(loadOwnJSON())
+        return [
+            SourceInfo(source: .cli, available: cli.0, detail: cli.1),
+            SourceInfo(source: .cliFile, available: file.0, detail: file.1),
+            SourceInfo(source: .own, available: own.0, detail: own.1),
+        ]
+    }
 
     // MARK: - Public
 
@@ -101,7 +130,7 @@ final class ClaudeProvider {
         switch source {
         case .cli: snap.notes.append(.usingCLILogin)
         case .cliFile: snap.notes.append(.usingCLIFileLogin)
-        case .own: break
+        case .own: snap.notes.append(.usingOwnLogin)
         }
         return snap
     }
@@ -207,16 +236,25 @@ final class ClaudeProvider {
 
     private func loadCreds() async throws -> (Creds, Source) {
         try await Task.detached(priority: .utility) { () -> (Creds, Source) in
-            // Claude Code's own login first (zero setup); the app-specific token is the fallback.
-            if let cli = Self.loadCLIJSON(), let o = cli["claudeAiOauth"] as? [String: Any], let c = Creds(json: o) {
-                return (c, .cli)
+            func load(_ src: Source) -> Creds? {
+                switch src {
+                case .cli: return (Self.loadCLIJSON()?["claudeAiOauth"] as? [String: Any]).flatMap(Creds.init)
+                case .cliFile: return (Self.loadCLIFileJSON()?["claudeAiOauth"] as? [String: Any]).flatMap(Creds.init)
+                case .own: return Self.loadOwnJSON().flatMap(Creds.init)
+                }
             }
-            if let file = Self.loadCLIFileJSON(), let o = file["claudeAiOauth"] as? [String: Any], let c = Creds(json: o) {
-                return (c, .cliFile)
+            // A specific source chosen in settings, or auto: Claude Code's own login first
+            // (zero setup), the app-specific token as the fallback.
+            if let chosen = Source(rawValue: Settings.claudeSource) {
+                if let c = load(chosen) { return (c, chosen) }
+                throw ProviderError("선택한 Claude 인증 소스(\(chosen.title))를 찾을 수 없습니다. '인증 설정…'에서 다른 소스를 고르세요.",
+                                    "The selected Claude credential source (\(chosen.title)) was not found. Pick another in 'Sign-in settings…'.", needsLogin: true)
             }
-            if let own = Self.loadOwnJSON(), let c = Creds(json: own) { return (c, .own) }
-            throw ProviderError("Claude 로그인 정보가 없습니다. 터미널에서 `claude`로 로그인하거나 아래에서 로그인하세요.",
-                                "No Claude login found. Sign in with the `claude` CLI, or sign in below.", needsLogin: true)
+            for src in Source.allCases {
+                if let c = load(src) { return (c, src) }
+            }
+            throw ProviderError("Claude 로그인 정보가 없습니다. 터미널에서 `claude`로 로그인하거나 '인증 설정…'에서 앱 전용 로그인을 하세요.",
+                                "No Claude login found. Sign in with the `claude` CLI, or use the app-specific login in 'Sign-in settings…'.", needsLogin: true)
         }.value
     }
 
@@ -381,5 +419,16 @@ extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+
+extension ClaudeProvider.Source {
+    var title: String {
+        switch self {
+        case .cli: return L.s("Claude Code CLI 로그인 (키체인)", "Claude Code CLI login (Keychain)")
+        case .cliFile: return L.s("Claude Code CLI 로그인 (~/.claude/.credentials.json)", "Claude Code CLI login (~/.claude/.credentials.json)")
+        case .own: return L.s("앱 전용 토큰", "App-specific token")
+        }
     }
 }

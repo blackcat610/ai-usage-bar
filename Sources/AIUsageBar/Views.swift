@@ -148,14 +148,14 @@ struct ProviderSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     if state.needsLogin, let loginAction {
-                        Button(L.s("Claude 로그인…", "Sign in to Claude…"), action: loginAction).controlSize(.small)
+                        Button(L.s("인증 설정…", "Sign-in settings…"), action: loginAction).controlSize(.small)
                     }
                 }
             } else if enabled, let loginAction, name == "Claude" {
                 // Always reachable, so the user can switch to the app's own login.
                 HStack {
                     Spacer()
-                    Button(L.s("로그인 설정…", "Sign-in settings…"), action: loginAction)
+                    Button(L.s("인증 설정…", "Sign-in settings…"), action: loginAction)
                         .buttonStyle(.plain).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
@@ -208,44 +208,78 @@ struct ClaudeLoginView: View {
     var done: () -> Void
     var close: () -> Void
 
+    @State private var sources: [ClaudeProvider.SourceInfo] = []
+    @State private var selection: String = Settings.claudeSource
     @State private var code = ""
     @State private var busy = false
     @State private var message: String?
     @State private var isError = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L.s("Claude 로그인 (앱 전용 토큰)", "Claude sign-in (app-specific token)")).font(.headline)
-            Text(L.s("Claude Code CLI 로그인이 있으면 항상 그것을 먼저 씁니다. CLI 로그인이 없을 때만 여기서 앱 전용으로 한 번 로그인하세요.\n1) 아래 버튼으로 브라우저에서 승인 → 2) 페이지에 표시된 코드를 복사해 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 그 코드를 여기에 넣으면 됩니다.)",
-                     "A Claude Code CLI login is always used first. Sign in here for an app-specific token only if there is no CLI login.\n1) Approve in the browser using the button below → 2) copy the code shown on the page and paste it here → 3) Connect. (The page may say to paste it into Claude Code; paste it here instead.)"))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button(L.s("1. 브라우저에서 로그인", "1. Sign in in browser")) {
-                    NSWorkspace.shared.open(provider.beginLogin())
-                    message = nil
-                }
-                if provider.hasOwnLogin() {
-                    Button(L.s("앱 전용 토큰 삭제", "Remove app token")) {
-                        provider.forgetOwnLogin()
-                        isError = false
-                        message = L.s("앱 전용 토큰을 삭제했습니다. 다시 Claude Code 로그인 정보를 사용합니다.",
-                                      "App token removed. Falling back to the Claude Code login.")
+        VStack(alignment: .leading, spacing: 12) {
+            // Source picker
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L.s("사용할 Claude 인증", "Claude credential to use")).font(.headline)
+                Picker("", selection: $selection) {
+                    Text(L.s("자동 — 사용 가능한 것 중 Claude Code CLI 우선", "Automatic — prefer the Claude Code CLI login")).tag("auto")
+                    ForEach(sources) { info in
+                        HStack(spacing: 6) {
+                            Text(info.source.title)
+                            Text("· " + info.detail).foregroundStyle(info.available ? .secondary : .tertiary)
+                        }
+                        .tag(info.source.rawValue)
                     }
                 }
-            }
-            HStack {
-                TextField(L.s("2. 인증 코드 붙여넣기", "2. Paste the authorization code"), text: $code)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(submit)
-                Button(L.s("3. 연결", "3. Connect"), action: submit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            HStack(alignment: .top) {
-                if busy {
-                    ProgressView().controlSize(.small)
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                .onChange(of: selection) { _, v in
+                    Settings.claudeSource = v
+                    Settings.notify()
+                    done()   // re-fetch with the chosen source
                 }
+                Text(L.s("CLI 로그인이 있으면 별도 설정 없이 그것을 쓰는 것이 가장 간단합니다. 만료된 토큰은 사용 시 자동 갱신되어 같은 자리에 저장됩니다.",
+                         "If a CLI login exists, using it needs no setup. Expired tokens are refreshed on use and stored back in place."))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            // App-specific login
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L.s("앱 전용 토큰 로그인", "App-specific token sign-in")).font(.headline)
+                Text(L.s("Claude Code CLI 로그인이 없을 때 쓰는 방법입니다. 1) 브라우저에서 승인 → 2) 표시된 코드를 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 여기에 넣으면 됩니다.) 조직이 여러 개면 승인 페이지는 브라우저의 현재 조직을 쓰므로 Claude 구독이 있는 조직으로 전환한 뒤 진행하세요.",
+                         "For when there is no Claude Code CLI login. 1) Approve in the browser → 2) paste the code shown → 3) Connect. (Paste it here even if the page says to paste it into Claude Code.) With several organizations, the approval page uses the browser's current one — switch to the one with your Claude subscription first."))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button(L.s("1. 브라우저에서 로그인", "1. Sign in in browser")) {
+                        NSWorkspace.shared.open(provider.beginLogin())
+                        message = nil
+                    }
+                    if sources.first(where: { $0.source == .own })?.available == true {
+                        Button(L.s("앱 전용 토큰 삭제", "Remove app token")) {
+                            provider.forgetOwnLogin()
+                            isError = false
+                            message = L.s("앱 전용 토큰을 삭제했습니다.", "App token removed.")
+                            if selection == "own" { selection = "auto" }
+                            reload()
+                            done()
+                        }
+                    }
+                }
+                HStack {
+                    TextField(L.s("2. 인증 코드 붙여넣기", "2. Paste the authorization code"), text: $code)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(submit)
+                    Button(L.s("3. 연결", "3. Connect"), action: submit)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            HStack(alignment: .top) {
+                if busy { ProgressView().controlSize(.small) }
                 if let m = message {
                     Text(m).font(.caption).foregroundStyle(isError ? .red : .secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -257,7 +291,15 @@ struct ClaudeLoginView: View {
             }
         }
         .padding(16)
-        .frame(width: 460)
+        .frame(width: 520)
+        .onAppear(perform: reload)
+    }
+
+    private func reload() {
+        Task.detached(priority: .userInitiated) {
+            let probed = ClaudeProvider.probeSources()
+            await MainActor.run { sources = probed }
+        }
     }
 
     private func submit() {
@@ -269,8 +311,9 @@ struct ClaudeLoginView: View {
             do {
                 try await provider.completeLogin(pasted: pasted)
                 isError = false
-                message = L.s("연결되었습니다.", "Connected.")
+                message = L.s("연결되었습니다. 앱 전용 토큰이 저장되었습니다.", "Connected. The app-specific token is saved.")
                 code = ""
+                reload()
                 done()
             } catch let e as ProviderError {
                 isError = true

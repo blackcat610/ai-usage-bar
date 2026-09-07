@@ -79,6 +79,7 @@ struct UsageWindow: Identifiable, Equatable {
 enum Note: Equatable {
     case usingCLILogin
     case usingCLIFileLogin
+    case usingOwnLogin
     case extraUsage(used: Double, limit: Double)
     case credits(String)
     case limitReached
@@ -88,6 +89,7 @@ enum Note: Equatable {
         switch self {
         case .usingCLILogin: return L.s("Claude Code 로그인 정보 사용 (키체인)", "Using Claude Code login (Keychain)")
         case .usingCLIFileLogin: return L.s("Claude Code 로그인 정보 사용 (~/.claude/.credentials.json)", "Using Claude Code login (~/.claude/.credentials.json)")
+        case .usingOwnLogin: return L.s("앱 전용 토큰 사용", "Using the app-specific token")
         case .extraUsage(let used, let limit):
             return String(format: L.s("추가 사용량 $%.2f / $%.2f", "Extra usage $%.2f / $%.2f"), used, limit)
         case .credits(let b): return L.s("크레딧 잔액 \(b)", "Credit balance \(b)")
