@@ -28,7 +28,7 @@ struct PopoverView: View {
             footer
         }
         .padding(12)
-        .frame(width: 400)
+        .frame(width: 420)
         .id(store.tick) // re-render everything (labels, countdowns) on tick or language change
     }
 
@@ -53,18 +53,6 @@ struct PopoverView: View {
                         }
                     }
                 Spacer()
-                Picker("", selection: $language) {
-                    Text(L.s("시스템 언어", "System language")).tag(Lang.system)
-                    Text("한국어").tag(Lang.ko)
-                    Text("English").tag(Lang.en)
-                }
-                .labelsHidden()
-                .frame(width: 130)
-                .onChange(of: language) { _, v in
-                    L.setting = v
-                    Settings.notify()
-                    store.tick &+= 1
-                }
                 Button(L.s("종료", "Quit"), role: .destructive, action: quit)
             }
             .controlSize(.small)
@@ -77,6 +65,20 @@ struct PopoverView: View {
                     Text(L.s("불러오는 중…", "Loading…"))
                 }
                 if let e = launchError { Text("· \(e)").foregroundStyle(.red) }
+                Spacer()
+                Picker("", selection: $language) {
+                    Text(L.s("시스템 언어", "System language")).tag(Lang.system)
+                    Text("한국어").tag(Lang.ko)
+                    Text("English").tag(Lang.en)
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 130)
+                .onChange(of: language) { _, v in
+                    L.setting = v
+                    Settings.notify()
+                    store.tick &+= 1
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -163,7 +165,7 @@ struct WindowRow: View {
                 Text(window.label)
                     .font(compact ? .caption : .callout)
                     .foregroundStyle(compact ? .secondary : .primary)
-                    .frame(width: 150, alignment: .leading)
+                    .frame(width: 160, alignment: .leading)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 GaugeBar(fraction: window.remainingPercent / 100, tint: tint)
@@ -181,7 +183,7 @@ struct WindowRow: View {
                            "Resets in \(Fmt.countdownLong(to: r)) · \(Fmt.clock(r))"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 158)
+                    .padding(.leading, 168)
             }
         }
     }
@@ -310,7 +312,7 @@ struct MenuBarOptionsView: View {
             Text(L.s("메뉴바 표시", "Menu bar")).font(.caption).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 3) {
                 GridRow {
-                    Toggle(L.s("2줄 (끄면 1줄)", "Two rows (off = one line)"), isOn: $opts.twoRows)
+                    Toggle(L.s("2줄 (끄면 1줄)", "Two rows"), isOn: $opts.twoRows)
                     Toggle(L.s("아이콘", "Icons"), isOn: $opts.glyphs)
                     Toggle(L.s("남은 시간", "Time to reset"), isOn: $opts.countdown)
                 }
