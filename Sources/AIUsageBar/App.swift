@@ -56,22 +56,27 @@ enum AIUsageBarMain {
                     }
                 }
                 store.lastRefresh = Date()
-                // (name, appearance, background, bar height, number inside battery, two rows)
-                let variants: [(String, NSAppearance, NSColor, CGFloat, Bool, Bool)] = [
-                    ("2row-light", NSAppearance(named: .aqua)!, NSColor(white: 0.93, alpha: 1), 24, false, true),
-                    ("2row-dark", NSAppearance(named: .darkAqua)!, NSColor(white: 0.12, alpha: 1), 24, false, true),
-                    ("2row-dark-iphone", NSAppearance(named: .darkAqua)!, NSColor(white: 0.12, alpha: 1), 24, true, true),
-                    ("1row-dark", NSAppearance(named: .darkAqua)!, NSColor(white: 0.12, alpha: 1), 24, false, false),
-                    ("1row-light", NSAppearance(named: .aqua)!, NSColor(white: 0.93, alpha: 1), 24, false, false),
-                    ("1row-dark-iphone", NSAppearance(named: .darkAqua)!, NSColor(white: 0.12, alpha: 1), 24, true, false),
+                // (name, appearance, background, bar height, option overrides)
+                let dark = NSAppearance(named: .darkAqua)!, light = NSAppearance(named: .aqua)!
+                let darkBG = NSColor(white: 0.12, alpha: 1), lightBG = NSColor(white: 0.93, alpha: 1)
+                typealias Override = (inout MenuBarOptions) -> Void
+                let full: Override = { o in o.glyphs = true; o.battery = true; o.percent = true; o.countdown = true; o.percentSign = true }
+                let variants: [(String, NSAppearance, NSColor, CGFloat, Override)] = [
+                    ("2row-light", light, lightBG, 24, { o in full(&o); o.twoRows = true; o.percentInBattery = false }),
+                    ("2row-dark", dark, darkBG, 24, { o in full(&o); o.twoRows = true; o.percentInBattery = false }),
+                    ("2row-dark-iphone", dark, darkBG, 24, { o in full(&o); o.twoRows = true; o.percentInBattery = true }),
+                    ("1row-dark", dark, darkBG, 24, { o in full(&o); o.twoRows = false; o.percentInBattery = false }),
+                    ("1row-light", light, lightBG, 24, { o in full(&o); o.twoRows = false; o.percentInBattery = false }),
+                    ("1row-dark-iphone", dark, darkBG, 24, { o in full(&o); o.twoRows = false; o.percentInBattery = true }),
+                    // Minimal: icon + gauge only, and the same with the number inside (no % sign).
+                    ("1row-minimal", dark, darkBG, 24, { o in o.twoRows = false; o.glyphs = true; o.battery = true; o.percent = false; o.countdown = false }),
+                    ("1row-minimal-number", dark, darkBG, 24, { o in o.twoRows = false; o.glyphs = true; o.battery = true; o.percent = true; o.percentInBattery = true; o.percentSign = false; o.countdown = false }),
                 ]
-                // Preview every column regardless of the user's saved toggles; restore after.
+                // Preview with explicit options regardless of the user's saved toggles; restore after.
                 let saved = MenuBarOptions()
-                var forced = saved
-                forced.glyphs = true; forced.battery = true; forced.percent = true; forced.countdown = true
-                for (suffix, appearance, bg, h, inside, two) in variants {
-                    forced.percentInBattery = inside
-                    forced.twoRows = two
+                for (suffix, appearance, bg, h, override) in variants {
+                    var forced = saved
+                    override(&forced)
                     forced.apply()
                     let v = StatusView(frame: NSRect(x: 0, y: 0, width: 10, height: h))
                     var rows: [StatusView.Row] = []

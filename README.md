@@ -10,6 +10,10 @@ the system battery indicator.
 |---|---|---|
 | ![two rows](docs/menubar-two-rows.png) | ![one line](docs/menubar-one-row.png) | ![iPhone style](docs/menubar-iphone-style.png) |
 
+| Minimal (icon + gauge, the author's setup) | Minimal + number |
+|---|---|
+| ![minimal](docs/menubar-minimal.png) | ![minimal with number](docs/menubar-minimal-number.png) |
+
 *(Rendered from demo data; the battery at the far right of each image is the system battery glyph,
 drawn for size and alignment reference.)*
 
