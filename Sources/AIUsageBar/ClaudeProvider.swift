@@ -67,11 +67,11 @@ final class ClaudeProvider {
     static func probeSources() -> [SourceInfo] {
         func describe(_ json: [String: Any]?) -> (Bool, String) {
             guard let json, let c = Creds(json: json) else { return (false, L.s("없음", "not found")) }
-            let exp = Date(timeIntervalSince1970: c.expiresAtMs / 1000)
             var parts: [String] = []
             if let plan = planLabel(c) { parts.append(plan) }
-            parts.append(c.isExpired ? L.s("만료됨 · 사용 시 자동 갱신", "expired · refreshed on use")
-                                     : L.s("\(Fmt.clock(exp))까지 유효", "valid until \(Fmt.clock(exp))"))
+            // Access tokens expire every few hours and are refreshed on use, so the
+            // exact expiry is noise; just say it is usable.
+            parts.append(L.s("사용 가능 · 자동 갱신", "available · auto-refreshed"))
             return (true, parts.joined(separator: " · "))
         }
         let cli = describe(loadCLIJSON()?["claudeAiOauth"] as? [String: Any])
