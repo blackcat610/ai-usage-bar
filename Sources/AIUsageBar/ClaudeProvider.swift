@@ -4,11 +4,11 @@ import CryptoKit
 /// Claude usage via the Claude Code OAuth token.
 ///
 /// Token sources, in order:
-///  1. The app's own OAuth credentials (obtained through the in-app login flow,
-///     stored in the app's own keychain item) — refreshed freely by us.
-///  2. Claude Code CLI's keychain item ("Claude Code-credentials"). If its
-///     access token is expired we refresh it and write the rotated tokens back
-///     exactly the way Claude Code does, so the CLI keeps working.
+///  1. Claude Code CLI's keychain item ("Claude Code-credentials"), then its
+///     credentials file. If the access token is expired we refresh it and write
+///     the rotated tokens back exactly the way Claude Code does, so the CLI keeps working.
+///  2. The app's own OAuth credentials (in-app login, stored in the app's own
+///     keychain item) — only when there is no Claude Code login.
 final class ClaudeProvider {
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
@@ -207,13 +207,14 @@ final class ClaudeProvider {
 
     private func loadCreds() async throws -> (Creds, Source) {
         try await Task.detached(priority: .utility) { () -> (Creds, Source) in
-            if let own = Self.loadOwnJSON(), let c = Creds(json: own) { return (c, .own) }
+            // Claude Code's own login first (zero setup); the app-specific token is the fallback.
             if let cli = Self.loadCLIJSON(), let o = cli["claudeAiOauth"] as? [String: Any], let c = Creds(json: o) {
                 return (c, .cli)
             }
             if let file = Self.loadCLIFileJSON(), let o = file["claudeAiOauth"] as? [String: Any], let c = Creds(json: o) {
                 return (c, .cliFile)
             }
+            if let own = Self.loadOwnJSON(), let c = Creds(json: own) { return (c, .own) }
             throw ProviderError("Claude 로그인 정보가 없습니다. 터미널에서 `claude`로 로그인하거나 아래에서 로그인하세요.",
                                 "No Claude login found. Sign in with the `claude` CLI, or sign in below.", needsLogin: true)
         }.value

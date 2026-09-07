@@ -59,9 +59,11 @@ same place**, exactly like the CLIs do themselves, so your CLI logins keep worki
 is rate-limited (429) the app backs off for 15 minutes and keeps showing the last values.
 
 **App-specific Claude login.** If you never use the Claude Code CLI (desktop app only), the popover's
-*Sign-in settings…* offers a one-time PKCE login: approve in the browser, paste the code. The token
-is stored in the app's own Keychain item (`AIUsageBar / claude-oauth`) and, when present, is
-preferred over the CLI login. This path is less exercised than the CLI path — please report issues.
+*Sign-in settings…* opens a small window for a one-time PKCE login: approve in the browser, paste the
+code. The token is stored in the app's own Keychain item (`AIUsageBar / claude-oauth`) and is used
+only when no Claude Code login exists. If your account belongs to several organizations, the approval
+page uses the browser's current one; a token for an API/Console organization (no Claude subscription)
+is rejected with a clear message — switch organization on platform.claude.com and sign in again.
 
 Nothing leaves your machine except the requests to Anthropic and OpenAI above. There is no
 telemetry.
