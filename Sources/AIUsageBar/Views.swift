@@ -256,8 +256,8 @@ struct ClaudeLoginView: View {
             // App-specific login
             VStack(alignment: .leading, spacing: 8) {
                 Text(L.s("앱 전용 토큰 로그인", "App-specific token sign-in")).font(.headline)
-                Text(L.s("Claude Code CLI 로그인이 없을 때 쓰는 방법입니다. 1) 브라우저에서 승인 → 2) 표시된 코드를 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 여기에 넣으면 됩니다.) 조직이 여러 개면 승인 페이지는 브라우저의 현재 조직을 쓰므로 Claude 구독이 있는 조직으로 전환한 뒤 진행하세요.",
-                         "For when there is no Claude Code CLI login. 1) Approve in the browser → 2) paste the code shown → 3) Connect. (Paste it here even if the page says to paste it into Claude Code.) With several organizations, the approval page uses the browser's current one — switch to the one with your Claude subscription first."))
+                Text(L.s("Claude Code CLI 로그인이 없을 때 쓰는 방법입니다. 1) 브라우저에서 승인 → 2) 표시된 코드를 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 여기에 넣으면 됩니다.)",
+                         "For when there is no Claude Code CLI login. 1) Approve in the browser → 2) paste the code shown → 3) Connect. (Paste it here even if the page says to paste it into Claude Code.)"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
