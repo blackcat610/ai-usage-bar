@@ -117,7 +117,7 @@ enum AIUsageBarMain {
                 // Sign-in settings window preview (probes real keychain/file availability).
                 do {
                     let probed = await Task.detached { ClaudeProvider.probeSources() }.value
-                    let auth = ClaudeLoginView(provider: store.claudeProvider, initialSources: probed, done: {}, close: {})
+                    let auth = ClaudeLoginView(provider: store.claudeProvider, done: {}, close: {}, initialSources: probed)
                         .background(Color(nsColor: .windowBackgroundColor))
                     let r = ImageRenderer(content: auth)
                     r.scale = 2

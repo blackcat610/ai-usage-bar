@@ -208,20 +208,17 @@ struct ClaudeLoginView: View {
     var done: () -> Void
     var close: () -> Void
 
-    @State private var sources: [ClaudeProvider.SourceInfo]
+    /// Seed for previews (the live window probes in `onAppear`).
+    var initialSources: [ClaudeProvider.SourceInfo] = []
+
+    @State private var probed: [ClaudeProvider.SourceInfo] = []
     @State private var selection: String = Settings.claudeSource
     @State private var code = ""
     @State private var busy = false
     @State private var message: String?
     @State private var isError = false
 
-    init(provider: ClaudeProvider, initialSources: [ClaudeProvider.SourceInfo] = [],
-         done: @escaping () -> Void, close: @escaping () -> Void) {
-        self.provider = provider
-        self.done = done
-        self.close = close
-        _sources = State(initialValue: initialSources)
-    }
+    private var sources: [ClaudeProvider.SourceInfo] { probed.isEmpty ? initialSources : probed }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -305,8 +302,8 @@ struct ClaudeLoginView: View {
 
     private func reload() {
         Task.detached(priority: .userInitiated) {
-            let probed = ClaudeProvider.probeSources()
-            await MainActor.run { sources = probed }
+            let result = ClaudeProvider.probeSources()
+            await MainActor.run { probed = result }
         }
     }
 

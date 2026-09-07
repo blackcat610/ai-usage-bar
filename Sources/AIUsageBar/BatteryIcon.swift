@@ -216,7 +216,7 @@ final class StatusView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil } // let the button take clicks
 
     private func percentFont() -> NSFont { .monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold) }
-    private func dimFont() -> NSFont { .monospacedDigitSystemFont(ofSize: fontSize - 0.5, weight: .regular) }
+    private func dimFont() -> NSFont { .monospacedDigitSystemFont(ofSize: fontSize - 0.5, weight: .light) }
     private func width(_ text: String, _ font: NSFont) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
@@ -299,7 +299,7 @@ final class StatusView: NSView {
             x += colW + gap
         }
         if Settings.showCountdown, let c = row.countdown {
-            let cs = NSAttributedString(string: c, attributes: [.font: dimFont(), .foregroundColor: NSColor.secondaryLabelColor])
+            let cs = NSAttributedString(string: c, attributes: [.font: dimFont(), .foregroundColor: NSColor.labelColor])
             let sz = cs.size()
             cs.draw(at: NSPoint(x: snap(x), y: snap(midY - sz.height / 2)))
             x += sz.width + gap
