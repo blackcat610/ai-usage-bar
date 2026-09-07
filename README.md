@@ -4,6 +4,15 @@ A tiny macOS menu-bar app that shows how much of your **Claude** (Claude Pro/Max
 and **Codex** (ChatGPT Plus/Pro) usage is left, and how long until each limit resets — drawn like
 the system battery indicator.
 
+> Unofficial, personal project. Not affiliated with or endorsed by Anthropic or OpenAI.
+
+| Two rows | One line | Number inside the battery |
+|---|---|---|
+| ![two rows](docs/menubar-two-rows.png) | ![one line](docs/menubar-one-row.png) | ![iPhone style](docs/menubar-iphone-style.png) |
+
+*(Rendered from demo data; the battery at the far right of each image is the system battery glyph,
+drawn for size and alignment reference.)*
+
 ```
  ✳  [▮▮▯]  53  13h29m        ← Claude: remaining % of the tightest window, time to its reset
 ‹/› [▯▯▯]  18  47m           ← Codex
@@ -11,6 +20,7 @@ the system battery indicator.
 
 - Two stacked rows (compare at a glance) or one line. Icons, battery gauge, number, `%` sign,
   number-inside-battery (iPhone style) and time-to-reset are all individually switchable.
+- Show Claude only, Codex only, or both. A hidden provider is not polled.
 - Red fill and number at 20 % or less, like the macOS battery.
 - Click for a popover with every window (5-hour session, 7-day all models, 7-day per-model, Codex
   weekly / 5-hour / add-on limits), a gauge, remaining %, and the reset time. Right-click for
@@ -25,7 +35,7 @@ the system battery indicator.
 Requires macOS 14+ and Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/<you>/ai-usage-bar.git
+git clone https://github.com/blackcat610/ai-usage-bar.git
 cd ai-usage-bar
 ./build.sh --install      # builds, copies to /Applications, launches
 ```
@@ -103,7 +113,8 @@ Claude(Claude Code 구독)와 Codex(ChatGPT 구독)의 **잔여 사용량**과 *
   `~/.codex/auth.json`의 ChatGPT 로그인을 그대로 읽습니다. 만료된 토큰은 CLI와 같은 방식으로 갱신해
   같은 자리에 되돌려 씁니다.
 - 2줄/1줄, 아이콘, 배터리 바, 잔여 숫자, % 기호, 숫자를 배터리 안에(아이폰식), 남은 시간을 각각 켜고 끌 수
-  있습니다. 20% 이하는 빨간색입니다.
+  있습니다. 20% 이하는 빨간색입니다. Claude·Codex 중 원하는 것만 표시할 수도 있습니다.
+- 비공식 개인 프로젝트이며 Anthropic·OpenAI와 무관합니다.
 - 설치: `./build.sh --install` (macOS 14+, Command Line Tools 필요). 팝오버에서 "로그인 시 실행"을 켜면
   부팅 시 자동 실행됩니다.
 - 두 사용량 API는 비공식입니다. 제공자가 바꾸면 동작이 멈출 수 있습니다.
