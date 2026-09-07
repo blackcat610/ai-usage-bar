@@ -5,8 +5,8 @@ import ServiceManagement
 struct PopoverView: View {
     @ObservedObject var store: UsageStore
     var quit: () -> Void
+    var openClaudeLogin: () -> Void
 
-    @State private var showClaudeLogin = false
     @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @State private var launchError: String?
     @State private var opts = MenuBarOptions()
@@ -20,13 +20,7 @@ struct PopoverView: View {
             }
             ProviderSection(name: "Claude", state: store.claude, tick: store.tick,
                             enabled: Binding(get: { Settings.showClaude }, set: { Settings.showClaude = $0; providerToggled() }),
-                            loginAction: { showClaudeLogin.toggle() })
-            if showClaudeLogin && Settings.showClaude {
-                ClaudeLoginView(provider: store.claudeProvider, done: {
-                    showClaudeLogin = false
-                    store.refresh()
-                })
-            }
+                            loginAction: openClaudeLogin)
             Divider()
             ProviderSection(name: "Codex", state: store.codex, tick: store.tick,
                             enabled: Binding(get: { Settings.showCodex }, set: { Settings.showCodex = $0; providerToggled() }),
@@ -36,7 +30,6 @@ struct PopoverView: View {
         }
         .padding(12)
         .frame(width: 420)
-        .id(store.tick) // re-render everything (labels, countdowns) on tick or language change
     }
 
     private func providerToggled() {
@@ -69,7 +62,7 @@ struct PopoverView: View {
                 Button(L.s("종료", "Quit"), role: .destructive, action: quit)
             }
             .controlSize(.small)
-            MenuBarOptionsView(opts: $opts)
+            MenuBarOptionsView(opts: $opts).id(language)
             HStack {
                 if let t = store.lastRefresh {
                     Text(L.s("마지막 갱신 \(Fmt.time(t)) · \(Int(store.refreshInterval / 60))분마다 자동",
@@ -213,27 +206,25 @@ struct WindowRow: View {
 struct ClaudeLoginView: View {
     let provider: ClaudeProvider
     var done: () -> Void
+    var close: () -> Void
 
     @State private var code = ""
     @State private var busy = false
     @State private var message: String?
     @State private var isError = false
-    @State private var started = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(L.s("Claude 로그인 (앱 전용 토큰)", "Claude sign-in (app-specific token)")).font(.subheadline.bold())
-            Text(L.s("기본은 Claude Code CLI의 로그인 정보를 그대로 읽습니다. 그게 만료·불가하면 여기서 앱 전용으로 한 번 로그인하세요. 1) 브라우저에서 승인 → 2) 표시된 코드를 붙여넣기.",
-                     "By default the app reads the Claude Code CLI login. If that is unavailable or expired, sign in once here for an app-specific token. 1) Approve in the browser → 2) paste the code shown."))
-                .font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.s("Claude 로그인 (앱 전용 토큰)", "Claude sign-in (app-specific token)")).font(.headline)
+            Text(L.s("기본은 Claude Code CLI의 로그인 정보를 그대로 읽습니다. 그게 만료·불가하면 여기서 앱 전용으로 한 번 로그인하세요.\n1) 아래 버튼으로 브라우저에서 승인 → 2) 페이지에 표시된 코드를 복사해 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 그 코드를 여기에 넣으면 됩니다.)",
+                     "By default the app reads the Claude Code CLI login. If that is unavailable or expired, sign in once here for an app-specific token.\n1) Approve in the browser using the button below → 2) copy the code shown on the page and paste it here → 3) Connect. (The page may say to paste it into Claude Code; paste it here instead.)"))
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button(L.s("1. 브라우저에서 로그인", "1. Sign in in browser")) {
                     NSWorkspace.shared.open(provider.beginLogin())
-                    started = true
                     message = nil
                 }
-                .controlSize(.small)
                 if provider.hasOwnLogin() {
                     Button(L.s("앱 전용 토큰 삭제", "Remove app token")) {
                         provider.forgetOwnLogin()
@@ -241,25 +232,32 @@ struct ClaudeLoginView: View {
                         message = L.s("앱 전용 토큰을 삭제했습니다. 다시 Claude Code 로그인 정보를 사용합니다.",
                                       "App token removed. Falling back to the Claude Code login.")
                     }
-                    .controlSize(.small)
                 }
             }
             HStack {
-                TextField(L.s("2. 인증 코드 붙여넣기 (code#state)", "2. Paste the authorization code (code#state)"), text: $code)
+                TextField(L.s("2. 인증 코드 붙여넣기", "2. Paste the authorization code"), text: $code)
                     .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
                     .onSubmit(submit)
-                Button(L.s("연결", "Connect"), action: submit)
-                    .controlSize(.small)
-                    .disabled(busy || code.trimmingCharacters(in: .whitespaces).isEmpty || !started)
+                Button(L.s("3. 연결", "3. Connect"), action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if let m = message {
-                Text(m).font(.caption2).foregroundStyle(isError ? .red : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                }
+                if let m = message {
+                    Text(m).font(.caption).foregroundStyle(isError ? .red : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Button(L.s("닫기", "Close"), action: close)
+                    .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        .padding(16)
+        .frame(width: 460)
     }
 
     private func submit() {

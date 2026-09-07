@@ -13,6 +13,7 @@ final class ClaudeProvider {
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
     static let authorizeURL = "https://platform.claude.com/oauth/authorize"
     static let redirectURI = "https://platform.claude.com/oauth/code/callback"
     static let loginScopes = "user:profile user:inference"
@@ -73,6 +74,16 @@ final class ClaudeProvider {
             (status, data) = try await callUsage(creds.accessToken)
         }
         guard status == 200 else {
+            if status == 403, HTTP.errorCode(data) == "oauth_not_allowed_for_organization" {
+                throw ProviderError(
+                    source == .own
+                        ? "앱 전용 토큰이 Claude 구독이 없는 조직으로 발급되었습니다. '로그인 설정…'에서 앱 전용 토큰을 삭제하고, 구독이 있는 조직을 선택해 다시 로그인하세요."
+                        : "이 로그인의 조직에는 Claude 구독이 없어 사용량을 조회할 수 없습니다.",
+                    source == .own
+                        ? "The app token belongs to an organization without a Claude subscription. Remove it in 'Sign-in settings…' and sign in again choosing the subscribed organization."
+                        : "This login's organization has no Claude subscription, so usage cannot be read.",
+                    needsLogin: true)
+            }
             if status == 401 || status == 403 {
                 throw ProviderError("Claude 인증이 만료되었습니다. 아래에서 다시 로그인하세요.", "Claude authentication expired. Sign in again below.", needsLogin: true)
             }
@@ -156,6 +167,25 @@ final class ClaudeProvider {
         ]
         if let acct = j["account"] as? [String: Any], let s = acct["subscription_type"] as? String {
             stored["subscriptionType"] = s
+        }
+
+        // The approval page may bind the token to an API/Console organization, which has no
+        // Claude subscription and is refused by the usage endpoint. Check before saving.
+        let (pStatus, pData) = try await HTTP.request(Self.profileURL, headers: Self.headers(token: access))
+        if pStatus == 200, let prof = HTTP.json(pData) {
+            let org = prof["organization"] as? [String: Any]
+            let orgName = (org?["name"] as? String) ?? "?"
+            let orgType = (org?["organization_type"] as? String) ?? ""
+            let acct = prof["account"] as? [String: Any]
+            if !orgType.hasPrefix("claude") {
+                throw ProviderError(
+                    "승인된 조직 '\(orgName)'(\(orgType))에는 Claude 구독이 없어 사용량을 조회할 수 없습니다. 브라우저 승인 화면에서 Claude Pro/Max 구독이 있는 조직(보통 개인 계정)을 선택해 다시 로그인하세요.",
+                    "The approved organization '\(orgName)' (\(orgType)) has no Claude subscription, so usage cannot be read. Sign in again and pick the organization that holds your Claude Pro/Max subscription (usually your personal one) on the approval page.")
+            }
+            if stored["subscriptionType"] == nil {
+                if (acct?["has_claude_max"] as? Bool) == true { stored["subscriptionType"] = "max" }
+                else if (acct?["has_claude_pro"] as? Bool) == true { stored["subscriptionType"] = "pro" }
+            }
         }
         try Self.saveOwn(stored)
         pendingVerifier = nil

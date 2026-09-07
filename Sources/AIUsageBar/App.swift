@@ -109,7 +109,7 @@ enum AIUsageBarMain {
                     }
                 }
                 saved.apply()   // restore before exit() (defer would not run)
-                let view = PopoverView(store: store, quit: {}).background(Color(nsColor: .windowBackgroundColor))
+                let view = PopoverView(store: store, quit: {}, openClaudeLogin: {}).background(Color(nsColor: .windowBackgroundColor))
                 let renderer = ImageRenderer(content: view)
                 renderer.scale = 2
                 if let cg = renderer.cgImage {

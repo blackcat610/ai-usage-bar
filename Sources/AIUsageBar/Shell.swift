@@ -77,6 +77,13 @@ enum HTTP {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
+    /// Anthropic-style `error.details.error_code`, when present.
+    static func errorCode(_ data: Data) -> String? {
+        guard let j = json(data), let e = j["error"] as? [String: Any] else { return nil }
+        if let d = e["details"] as? [String: Any], let c = d["error_code"] as? String { return c }
+        return nil
+    }
+
     static func errorSnippet(_ data: Data) -> String {
         if let j = json(data) {
             if let e = j["error"] as? [String: Any], let m = e["message"] as? String { return m }
