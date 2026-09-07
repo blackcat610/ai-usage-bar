@@ -7,6 +7,10 @@ enum Settings {
     }
     private static func set(_ key: String, _ v: Bool) { UserDefaults.standard.set(v, forKey: key) }
 
+    /// Which providers to show (and poll).
+    static var showClaude: Bool { get { flag("showClaude", default: true) } set { set("showClaude", newValue) } }
+    static var showCodex: Bool { get { flag("showCodex", default: true) } set { set("showCodex", newValue) } }
+
     /// Two stacked rows (Claude over Codex) instead of one line.
     static var twoRows: Bool { get { flag("twoRows", default: true) } set { set("twoRows", newValue) } }
     /// Provider glyph (✳ / ‹/›) in brand color.
@@ -162,6 +166,8 @@ enum ProviderGlyph {
 
     static let claude = image(symbol: "asterisk", fallback: "✳", tint: Brand.claude)
     static let codex = image(symbol: "chevron.left.forwardslash.chevron.right", fallback: "</>", tint: Brand.codex)
+    /// Shown when no provider is enabled, so the item stays visible and clickable.
+    static let placeholder = image(symbol: "gauge.with.dots.needle.50percent", fallback: "◔", tint: .labelColor)
 }
 
 /// The status-item content view. Two stacked rows (Claude over Codex) with
@@ -181,7 +187,8 @@ final class StatusView: NSView {
     private let padding: CGFloat = 2
     private let gap: CGFloat = 2
     private let providerGap: CGFloat = 10
-    private var twoRows: Bool { Settings.twoRows }
+    /// Two rows only make sense with two providers; a single row centers itself.
+    private var twoRows: Bool { Settings.twoRows && rows.count >= 2 }
 
     // Metrics: two-row mode scales to half the bar height; one-row mode matches
     // the system battery glyph (about 26x12pt) and 12pt menu-bar text.
@@ -231,7 +238,7 @@ final class StatusView: NSView {
     }
 
     func preferredWidth() -> CGFloat {
-        guard !rows.isEmpty else { return 20 }
+        guard !rows.isEmpty else { return 22 }
         if twoRows {
             return ceil(padding * 2 + (rows.map { rowWidth($0, aligned: true) }.max() ?? 0))
         }
@@ -240,7 +247,11 @@ final class StatusView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !rows.isEmpty else { return }
+        guard !rows.isEmpty else {
+            let g: CGFloat = 14
+            ProviderGlyph.placeholder.draw(in: NSRect(x: BatteryIcon.snap(bounds.midX - g / 2), y: BatteryIcon.snap(bounds.midY - g / 2), width: g, height: g))
+            return
+        }
         if twoRows {
             let rh = rowHeight
             for (i, row) in rows.prefix(2).enumerated() {

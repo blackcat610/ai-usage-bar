@@ -14,22 +14,35 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !Settings.showClaude && !Settings.showCodex {
+                Text(L.s("메뉴바에 표시할 서비스를 하나 이상 선택하세요.", "Select at least one service to show in the menu bar."))
+                    .font(.caption).foregroundStyle(.orange)
+            }
             ProviderSection(name: "Claude", state: store.claude, tick: store.tick,
+                            enabled: Binding(get: { Settings.showClaude }, set: { Settings.showClaude = $0; providerToggled() }),
                             loginAction: { showClaudeLogin.toggle() })
-            if showClaudeLogin {
+            if showClaudeLogin && Settings.showClaude {
                 ClaudeLoginView(provider: store.claudeProvider, done: {
                     showClaudeLogin = false
                     store.refresh()
                 })
             }
             Divider()
-            ProviderSection(name: "Codex", state: store.codex, tick: store.tick, loginAction: nil)
+            ProviderSection(name: "Codex", state: store.codex, tick: store.tick,
+                            enabled: Binding(get: { Settings.showCodex }, set: { Settings.showCodex = $0; providerToggled() }),
+                            loginAction: nil)
             Divider()
             footer
         }
         .padding(12)
         .frame(width: 420)
         .id(store.tick) // re-render everything (labels, countdowns) on tick or language change
+    }
+
+    private func providerToggled() {
+        Settings.notify()
+        store.tick &+= 1
+        store.refresh()
     }
 
     private var footer: some View {
@@ -90,6 +103,7 @@ struct ProviderSection: View {
     let name: String
     let state: ProviderState
     let tick: Int
+    @Binding var enabled: Bool
     let loginAction: (() -> Void)?
 
     private var brand: Color { Color(nsColor: name == "Claude" ? Brand.claude : Brand.codex) }
@@ -98,21 +112,28 @@ struct ProviderSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Image(systemName: symbol).font(.subheadline.bold()).foregroundStyle(brand)
-                Text(name).font(.headline)
-                if let plan = state.snapshot?.planLabel {
+                Toggle("", isOn: $enabled).toggleStyle(.checkbox).labelsHidden()
+                    .help(L.s("메뉴바에 표시", "Show in the menu bar"))
+                Image(systemName: symbol).font(.subheadline.bold()).foregroundStyle(enabled ? brand : .secondary)
+                Text(name).font(.headline).foregroundStyle(enabled ? .primary : .secondary)
+                if !enabled {
+                    Text(L.s("숨김", "hidden")).font(.caption).foregroundStyle(.tertiary)
+                }
+                if enabled, let plan = state.snapshot?.planLabel {
                     Text(plan).font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Color.secondary.opacity(0.15), in: Capsule())
                 }
                 Spacer()
-                if state.isLoading {
+                if !enabled {
+                    EmptyView()
+                } else if state.isLoading {
                     ProgressView().controlSize(.mini)
                 } else if let s = state.snapshot {
                     Text(Fmt.time(s.updatedAt)).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-            if let snap = state.snapshot {
+            if enabled, let snap = state.snapshot {
                 let primary = snap.windows.filter { $0.isPrimary }
                 let secondary = snap.windows.filter { !$0.isPrimary }
                 ForEach(primary) { WindowRow(window: $0, tick: tick, compact: false, brand: brand) }
@@ -127,7 +148,7 @@ struct ProviderSection: View {
                     Text(snap.notes.map(\.text).joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            if let err = state.errorMessage {
+            if enabled, let err = state.errorMessage {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     Text(err).font(.caption).foregroundStyle(.secondary)
@@ -137,7 +158,7 @@ struct ProviderSection: View {
                         Button(L.s("Claude 로그인…", "Sign in to Claude…"), action: loginAction).controlSize(.small)
                     }
                 }
-            } else if let loginAction, name == "Claude" {
+            } else if enabled, let loginAction, name == "Claude" {
                 // Always reachable, so the user can switch to the app's own login.
                 HStack {
                     Spacer()

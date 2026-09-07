@@ -36,11 +36,12 @@ final class UsageStore: ObservableObject {
     func refresh() {
         guard !inFlight else { return }
         inFlight = true
-        claude = .loading(previous: claude.snapshot)
-        codex = .loading(previous: codex.snapshot)
+        let doClaude = Settings.showClaude, doCodex = Settings.showCodex
+        if doClaude { claude = .loading(previous: claude.snapshot) }
+        if doCodex { codex = .loading(previous: codex.snapshot) }
         Task {
-            async let c: Void = refreshClaude()
-            async let x: Void = refreshCodex()
+            async let c: Void = doClaude ? refreshClaude() : ()
+            async let x: Void = doCodex ? refreshCodex() : ()
             _ = await (c, x)
             lastRefresh = Date()
             inFlight = false

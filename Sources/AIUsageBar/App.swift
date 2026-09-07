@@ -74,8 +74,10 @@ enum AIUsageBarMain {
                     forced.twoRows = two
                     forced.apply()
                     let v = StatusView(frame: NSRect(x: 0, y: 0, width: 10, height: h))
-                    v.rows = [AppDelegate.row(glyph: ProviderGlyph.claude, state: store.claude),
-                              AppDelegate.row(glyph: ProviderGlyph.codex, state: store.codex)]
+                    var rows: [StatusView.Row] = []
+                    if Settings.showClaude { rows.append(AppDelegate.row(glyph: ProviderGlyph.claude, state: store.claude)) }
+                    if Settings.showCodex { rows.append(AppDelegate.row(glyph: ProviderGlyph.codex, state: store.codex)) }
+                    v.rows = rows
                     v.frame = NSRect(x: 0, y: 0, width: v.preferredWidth(), height: h)
                     v.appearance = appearance
                     // Retina-accurate (2x) offscreen bitmap, then 2x more for inspection.

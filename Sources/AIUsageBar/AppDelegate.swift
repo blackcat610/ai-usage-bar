@@ -118,8 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusView.autoresizingMask = [.width, .height]
             button.addSubview(statusView)
         }
-        statusView.rows = [Self.row(glyph: ProviderGlyph.claude, state: store.claude),
-                           Self.row(glyph: ProviderGlyph.codex, state: store.codex)]
+        var rows: [StatusView.Row] = []
+        if Settings.showClaude { rows.append(Self.row(glyph: ProviderGlyph.claude, state: store.claude)) }
+        if Settings.showCodex { rows.append(Self.row(glyph: ProviderGlyph.codex, state: store.codex)) }
+        statusView.rows = rows
         statusView.frame = button.bounds
         statusItem.length = statusView.preferredWidth()
         statusView.frame = button.bounds
@@ -150,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if let e = st.errorMessage { out.append("  ⚠︎ \(e)") }
             return out
         }
-        return (lines("Claude", claude) + lines("Codex", codex)).joined(separator: "\n")
+        var out: [String] = []
+        if Settings.showClaude { out += lines("Claude", claude) }
+        if Settings.showCodex { out += lines("Codex", codex) }
+        if out.isEmpty { out = [L.s("표시할 서비스가 선택되지 않았습니다.", "No service selected.")] }
+        return out.joined(separator: "\n")
     }
 }
