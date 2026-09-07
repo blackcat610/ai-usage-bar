@@ -208,12 +208,20 @@ struct ClaudeLoginView: View {
     var done: () -> Void
     var close: () -> Void
 
-    @State private var sources: [ClaudeProvider.SourceInfo] = []
+    @State private var sources: [ClaudeProvider.SourceInfo]
     @State private var selection: String = Settings.claudeSource
     @State private var code = ""
     @State private var busy = false
     @State private var message: String?
     @State private var isError = false
+
+    init(provider: ClaudeProvider, initialSources: [ClaudeProvider.SourceInfo] = [],
+         done: @escaping () -> Void, close: @escaping () -> Void) {
+        self.provider = provider
+        self.done = done
+        self.close = close
+        _sources = State(initialValue: initialSources)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
