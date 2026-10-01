@@ -1,33 +1,26 @@
 import Foundation
-import CryptoKit
 
-/// Claude usage via the Claude Code OAuth token.
+/// Claude usage via the Claude Code CLI login. No login of its own.
 ///
-/// Token sources, in order:
-///  1. Claude Code CLI's keychain item ("Claude Code-credentials"), then its
-///     credentials file. If the access token is expired we refresh it and write
-///     the rotated tokens back exactly the way Claude Code does, so the CLI keeps working.
-///  2. The app's own OAuth credentials (in-app login, stored in the app's own
-///     keychain item) — only when there is no Claude Code login.
+/// Credentials come from where Claude Code keeps them: the Keychain item
+/// "Claude Code-credentials", or `$CLAUDE_CONFIG_DIR/.credentials.json` when the
+/// Keychain is unavailable. When the access token has expired we refresh it the
+/// same way Claude Code does — under Claude Code's own refresh lock, with the
+/// stored scopes, writing the rotated tokens back in place — so the CLI login
+/// keeps working and the two never race each other.
 final class ClaudeProvider {
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
-    static let authorizeURL = "https://platform.claude.com/oauth/authorize"
-    static let redirectURI = "https://platform.claude.com/oauth/code/callback"
-    static let loginScopes = "user:profile user:inference"
     static let betaHeader = "oauth-2025-04-20"
     static let userAgent = "AIUsageBar/1.0 (personal menu-bar usage monitor)"
-
-    static let ownService = "AIUsageBar"
-    static let ownAccount = "claude-oauth"
     static let cliService = "Claude Code-credentials"
 
-    struct Creds {
+    struct Creds: Equatable {
         var accessToken: String
         var refreshToken: String
         var expiresAtMs: Double
+        var scopes: [String]
         var subscriptionType: String?
         var rateLimitTier: String?
 
@@ -38,6 +31,7 @@ final class ClaudeProvider {
             accessToken = a
             refreshToken = r
             expiresAtMs = (json["expiresAt"] as? Double) ?? 0
+            scopes = (json["scopes"] as? [String]) ?? []
             subscriptionType = json["subscriptionType"] as? String
             rateLimitTier = json["rateLimitTier"] as? String
         }
@@ -47,299 +41,177 @@ final class ClaudeProvider {
             j["accessToken"] = accessToken
             j["refreshToken"] = refreshToken
             j["expiresAt"] = Int64(expiresAtMs)
+            if !scopes.isEmpty { j["scopes"] = scopes }
             if let s = subscriptionType { j["subscriptionType"] = s }
             if let t = rateLimitTier { j["rateLimitTier"] = t }
             return j
         }
     }
 
-    enum Source: String, CaseIterable { case cli, cliFile, own }
+    enum Source { case keychain, file }
 
-    /// What the settings window shows for each source.
-    struct SourceInfo: Identifiable, Equatable {
-        let source: Source
-        let available: Bool
-        let detail: String
-        var id: String { source.rawValue }
+    // MARK: - Paths
+
+    static var configDir: URL {
+        ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
     }
+    static var credentialsFile: URL { configDir.appendingPathComponent(".credentials.json") }
+    /// Claude Code's refresh lock (proper-lockfile: a directory, stale after 10 s).
+    static var refreshLock: URL { configDir.appendingPathComponent(".oauth_refresh.lock") }
 
-    /// Probe every source (keychain/file reads; call off the main thread).
-    static func probeSources() -> [SourceInfo] {
-        func describe(_ json: [String: Any]?) -> (Bool, String) {
-            guard let json, let c = Creds(json: json) else { return (false, L.s("없음", "not found")) }
-            var parts: [String] = []
-            if let plan = planLabel(c) { parts.append(plan) }
-            // Access tokens expire every few hours and are refreshed on use, so the
-            // exact expiry is noise; just say it is usable.
-            parts.append(L.s("사용 가능 · 자동 갱신", "available · auto-refreshed"))
-            return (true, parts.joined(separator: " · "))
-        }
-        let cli = describe(loadCLIJSON()?["claudeAiOauth"] as? [String: Any])
-        let file = describe(loadCLIFileJSON()?["claudeAiOauth"] as? [String: Any])
-        let own = describe(loadOwnJSON())
-        return [
-            SourceInfo(source: .cli, available: cli.0, detail: cli.1),
-            SourceInfo(source: .cliFile, available: file.0, detail: file.1),
-            SourceInfo(source: .own, available: own.0, detail: own.1),
-        ]
-    }
-
-    // MARK: - Public
+    // MARK: - Fetch
 
     private var usageBlockedUntil: Date = .distantPast
+    private var refreshBlockedUntil: Date = .distantPast
+    private var lastRefreshError: ProviderError?
 
     func fetch() async throws -> ProviderSnapshot {
         if Date() < usageBlockedUntil {
             let mins = max(1, Int(usageBlockedUntil.timeIntervalSinceNow / 60))
-            throw ProviderError("Claude 사용량 API 호출 제한(429). \(mins)분 후 재시도합니다.", "Claude usage API rate-limited (429). Retrying in \(mins) min.")
+            throw ProviderError("Claude 사용량 API 호출 제한(429). \(mins)분 후 재시도합니다.",
+                                "Claude usage API rate-limited (429). Retrying in \(mins) min.")
         }
         var (creds, source) = try await loadCreds()
         if creds.isExpired {
-            creds = try await refresh(creds, source: source)
+            creds = try await refreshUnderLock(creds, source: source)
         }
         var (status, data) = try await callUsage(creds.accessToken)
         if status == 401 {
-            creds = try await refresh(creds, source: source)
+            creds = try await refreshUnderLock(creds, source: source, force: true)
             (status, data) = try await callUsage(creds.accessToken)
         }
         guard status == 200 else {
             if status == 403, HTTP.errorCode(data) == "oauth_not_allowed_for_organization" {
-                throw ProviderError(
-                    source == .own
-                        ? "앱 전용 토큰이 Claude 구독이 없는 조직으로 발급되었습니다. '로그인 설정…'에서 앱 전용 토큰을 삭제하고, 구독이 있는 조직을 선택해 다시 로그인하세요."
-                        : "이 로그인의 조직에는 Claude 구독이 없어 사용량을 조회할 수 없습니다.",
-                    source == .own
-                        ? "The app token belongs to an organization without a Claude subscription. Remove it in 'Sign-in settings…' and sign in again choosing the subscribed organization."
-                        : "This login's organization has no Claude subscription, so usage cannot be read.",
-                    needsLogin: true)
+                throw ProviderError("이 Claude Code 로그인의 조직에는 Claude 구독이 없어 사용량을 조회할 수 없습니다.",
+                                    "This Claude Code login's organization has no Claude subscription, so usage cannot be read.",
+                                    needsLogin: true)
             }
             if status == 401 || status == 403 {
-                throw ProviderError("Claude 인증이 만료되었습니다. 아래에서 다시 로그인하세요.", "Claude authentication expired. Sign in again below.", needsLogin: true)
+                throw Self.reloginError()
             }
             if status == 429 {
                 usageBlockedUntil = Date().addingTimeInterval(10 * 60)
-                throw ProviderError("Claude 사용량 API 호출 제한(429). 10분 후 재시도합니다.", "Claude usage API rate-limited (429). Retrying in 10 min.")
+                throw ProviderError("Claude 사용량 API 호출 제한(429). 10분 후 재시도합니다.",
+                                    "Claude usage API rate-limited (429). Retrying in 10 min.")
             }
-            throw ProviderError("Claude 사용량 조회 실패 (HTTP \(status)): \(HTTP.errorSnippet(data))", "Claude usage request failed (HTTP \(status)): \(HTTP.errorSnippet(data))")
+            throw ProviderError("Claude 사용량 조회 실패 (HTTP \(status)): \(HTTP.errorSnippet(data))",
+                                "Claude usage request failed (HTTP \(status)): \(HTTP.errorSnippet(data))")
         }
         guard let json = HTTP.json(data) else {
             throw ProviderError("Claude 응답을 해석할 수 없습니다.", "Could not parse the Claude response.")
         }
         var snap = Self.parse(json)
         snap.planLabel = Self.planLabel(creds)
-        switch source {
-        case .cli: snap.notes.append(.usingCLILogin)
-        case .cliFile: snap.notes.append(.usingCLIFileLogin)
-        case .own: snap.notes.append(.usingOwnLogin)
-        }
+        snap.notes.append(source == .keychain ? .usingCLILogin : .usingCLIFileLogin)
         return snap
     }
 
-    // MARK: - Login (PKCE, manual code paste)
-
-    private var pendingVerifier: String?
-    /// After a failed refresh, hold off retrying for a while so a rate-limited
-    /// token endpoint is not hammered every polling cycle.
-    private var refreshBlockedUntil: Date = .distantPast
-    private var lastRefreshError: ProviderError?
-
-    func beginLogin() -> URL {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let verifier = Data(bytes).base64URL()
-        pendingVerifier = verifier
-        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL()
-        var c = URLComponents(string: Self.authorizeURL)!
-        c.queryItems = [
-            .init(name: "code", value: "true"),
-            .init(name: "client_id", value: Self.clientID),
-            .init(name: "response_type", value: "code"),
-            .init(name: "redirect_uri", value: Self.redirectURI),
-            .init(name: "scope", value: Self.loginScopes),
-            .init(name: "code_challenge", value: challenge),
-            .init(name: "code_challenge_method", value: "S256"),
-            .init(name: "state", value: verifier),
-        ]
-        return c.url!
+    static func reloginError() -> ProviderError {
+        ProviderError("Claude Code 로그인이 만료되었습니다. 터미널에서 `claude`를 실행해 다시 로그인하면 자동으로 이어집니다.",
+                      "The Claude Code login has expired. Run `claude` in a terminal and sign in again; the app picks it up automatically.",
+                      needsLogin: true)
     }
-
-    func completeLogin(pasted: String) async throws {
-        guard let verifier = pendingVerifier else {
-            throw ProviderError("먼저 '브라우저에서 로그인'을 눌러 주세요.", "Click 'Sign in in browser' first.")
-        }
-        let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = trimmed.split(separator: "#", maxSplits: 1).map(String.init)
-        guard let code = parts.first, !code.isEmpty else {
-            throw ProviderError("인증 코드가 비어 있습니다.", "The authorization code is empty.")
-        }
-        let state = parts.count > 1 ? parts[1] : verifier
-        let body: [String: Any] = [
-            "grant_type": "authorization_code",
-            "code": code,
-            "state": state,
-            "client_id": Self.clientID,
-            "redirect_uri": Self.redirectURI,
-            "code_verifier": verifier,
-        ]
-        let (status, data) = try await HTTP.request(Self.tokenURL, method: "POST",
-                                                    headers: Self.headers(), jsonBody: body)
-        guard status == 200, let j = HTTP.json(data),
-              let access = j["access_token"] as? String,
-              let refreshTok = j["refresh_token"] as? String else {
-            throw ProviderError("코드 교환 실패 (HTTP \(status)): \(HTTP.errorSnippet(data))", "Code exchange failed (HTTP \(status)): \(HTTP.errorSnippet(data))")
-        }
-        let expiresIn = (j["expires_in"] as? Double) ?? 3600
-        var stored: [String: Any] = [
-            "accessToken": access,
-            "refreshToken": refreshTok,
-            "expiresAt": Int64((Date().timeIntervalSince1970 + expiresIn) * 1000),
-        ]
-        if let acct = j["account"] as? [String: Any], let s = acct["subscription_type"] as? String {
-            stored["subscriptionType"] = s
-        }
-
-        // The approval page may bind the token to an API/Console organization, which has no
-        // Claude subscription and is refused by the usage endpoint. Check before saving.
-        let (pStatus, pData) = try await HTTP.request(Self.profileURL, headers: Self.headers(token: access))
-        if pStatus == 200, let prof = HTTP.json(pData) {
-            let org = prof["organization"] as? [String: Any]
-            let orgName = (org?["name"] as? String) ?? "?"
-            let orgType = (org?["organization_type"] as? String) ?? ""
-            let acct = prof["account"] as? [String: Any]
-            if !orgType.hasPrefix("claude") {
-                throw ProviderError(
-                    "승인된 조직 '\(orgName)'(\(orgType))에는 Claude 구독이 없어 사용량을 조회할 수 없습니다. 브라우저 승인 화면에서 Claude Pro/Max 구독이 있는 조직(보통 개인 계정)을 선택해 다시 로그인하세요.",
-                    "The approved organization '\(orgName)' (\(orgType)) has no Claude subscription, so usage cannot be read. Sign in again and pick the organization that holds your Claude Pro/Max subscription (usually your personal one) on the approval page.")
-            }
-            if stored["subscriptionType"] == nil {
-                if (acct?["has_claude_max"] as? Bool) == true { stored["subscriptionType"] = "max" }
-                else if (acct?["has_claude_pro"] as? Bool) == true { stored["subscriptionType"] = "pro" }
-            }
-        }
-        try Self.saveOwn(stored)
-        pendingVerifier = nil
-    }
-
-    func hasOwnLogin() -> Bool { Self.loadOwnJSON() != nil }
-
-    func forgetOwnLogin() { Keychain.delete(service: Self.ownService, account: Self.ownAccount) }
 
     // MARK: - Credentials
 
-    /// Claude Code stores credentials in the Keychain on macOS, or in
-    /// `$CLAUDE_CONFIG_DIR/.credentials.json` (default ~/.claude) when the Keychain is unavailable.
-    static var cliCredentialsFile: URL {
-        let dir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
-        return dir.appendingPathComponent(".credentials.json")
-    }
-
     private func loadCreds() async throws -> (Creds, Source) {
         try await Task.detached(priority: .utility) { () -> (Creds, Source) in
-            func load(_ src: Source) -> Creds? {
-                switch src {
-                case .cli: return (Self.loadCLIJSON()?["claudeAiOauth"] as? [String: Any]).flatMap(Creds.init)
-                case .cliFile: return (Self.loadCLIFileJSON()?["claudeAiOauth"] as? [String: Any]).flatMap(Creds.init)
-                case .own: return Self.loadOwnJSON().flatMap(Creds.init)
-                }
-            }
-            // A specific source chosen in settings, or auto: Claude Code's own login first
-            // (zero setup), the app-specific token as the fallback.
-            if let chosen = Source(rawValue: Settings.claudeSource) {
-                if let c = load(chosen) { return (c, chosen) }
-                throw ProviderError("선택한 Claude 인증 소스(\(chosen.title))를 찾을 수 없습니다. '인증 설정…'에서 다른 소스를 고르세요.",
-                                    "The selected Claude credential source (\(chosen.title)) was not found. Pick another in 'Sign-in settings…'.", needsLogin: true)
-            }
-            for src in Source.allCases {
-                if let c = load(src) { return (c, src) }
-            }
-            throw ProviderError("Claude 로그인 정보가 없습니다. 터미널에서 `claude`로 로그인하거나 '인증 설정…'에서 앱 전용 로그인을 하세요.",
-                                "No Claude login found. Sign in with the `claude` CLI, or use the app-specific login in 'Sign-in settings…'.", needsLogin: true)
+            if let c = Self.load(.keychain) { return (c, .keychain) }
+            if let c = Self.load(.file) { return (c, .file) }
+            throw ProviderError("Claude Code 로그인 정보가 없습니다. 터미널에서 `claude`를 실행해 로그인하세요.",
+                                "No Claude Code login found. Run `claude` in a terminal and sign in.", needsLogin: true)
         }.value
     }
 
-    private func refresh(_ creds: Creds, source: Source) async throws -> Creds {
-        if Date() < refreshBlockedUntil, let e = lastRefreshError {
-            let mins = max(1, Int(refreshBlockedUntil.timeIntervalSinceNow / 60))
-            throw ProviderError("\(e.text.ko) (\(mins)분 후 재시도)", "\(e.text.en) (retry in \(mins) min)", needsLogin: e.needsLogin)
+    private static func load(_ source: Source) -> Creds? {
+        (loadJSON(source)?["claudeAiOauth"] as? [String: Any]).flatMap(Creds.init)
+    }
+
+    private static func loadJSON(_ source: Source) -> [String: Any]? {
+        switch source {
+        case .keychain:
+            guard let s = Keychain.read(service: cliService, account: NSUserName()) ?? Keychain.read(service: cliService),
+                  let d = s.data(using: .utf8) else { return nil }
+            return HTTP.json(d)
+        case .file:
+            guard let d = try? Data(contentsOf: credentialsFile) else { return nil }
+            return HTTP.json(d)
         }
-        let body: [String: Any] = [
+    }
+
+    private static func save(_ creds: Creds, to source: Source) throws {
+        guard var full = loadJSON(source), let o = full["claudeAiOauth"] as? [String: Any] else {
+            throw ProviderError("Claude Code 로그인 정보를 다시 읽을 수 없어 갱신 토큰을 저장하지 못했습니다.",
+                                "Could not re-read the Claude Code credentials; the refreshed token was not saved.")
+        }
+        full["claudeAiOauth"] = creds.merged(into: o)
+        let data = try JSONSerialization.data(withJSONObject: full, options: [.sortedKeys])
+        switch source {
+        case .keychain:
+            guard Keychain.write(service: cliService, account: NSUserName(), value: String(decoding: data, as: UTF8.self)) else {
+                throw ProviderError("Claude Code 키체인 항목 쓰기 실패.", "Failed to write the Claude Code Keychain item.")
+            }
+        case .file:
+            try data.write(to: credentialsFile, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsFile.path)
+        }
+    }
+
+    // MARK: - Refresh (Claude Code's lock + protocol)
+
+    /// Refresh under Claude Code's `.oauth_refresh.lock`. After taking the lock the
+    /// stored credentials are re-read: if another process already refreshed them,
+    /// those are used and no refresh request is made (refresh tokens are single-use).
+    private func refreshUnderLock(_ creds: Creds, source: Source, force: Bool = false) async throws -> Creds {
+        if Date() < refreshBlockedUntil, let e = lastRefreshError {
+            if e.needsLogin { throw e }
+            let mins = max(1, Int(refreshBlockedUntil.timeIntervalSinceNow / 60))
+            throw ProviderError("\(e.text.ko) (\(mins)분 후 재시도)", "\(e.text.en) (retry in \(mins) min)")
+        }
+        let lock = try await Task.detached(priority: .utility) { try RefreshLock.acquire(Self.refreshLock) }.value
+        defer { lock.release() }
+
+        if let fresh = await Task.detached(priority: .utility, operation: { Self.load(source) }).value,
+           fresh.accessToken != creds.accessToken, !fresh.isExpired || !force {
+            if !fresh.isExpired { return fresh }
+        }
+        let next = try await requestRefresh(creds)
+        try await Task.detached(priority: .utility) { try Self.save(next, to: source) }.value
+        return next
+    }
+
+    private func requestRefresh(_ creds: Creds) async throws -> Creds {
+        var body: [String: Any] = [
             "grant_type": "refresh_token",
             "refresh_token": creds.refreshToken,
             "client_id": Self.clientID,
         ]
-        let (status, data) = try await HTTP.request(Self.tokenURL, method: "POST",
-                                                    headers: Self.headers(), jsonBody: body)
+        if !creds.scopes.isEmpty { body["scope"] = creds.scopes.joined(separator: " ") }
+        let (status, data) = try await HTTP.request(Self.tokenURL, method: "POST", headers: Self.headers(), jsonBody: body)
         guard status == 200, let j = HTTP.json(data), let access = j["access_token"] as? String else {
             let snippet = HTTP.errorSnippet(data)
-            let err = status == 429
-                ? ProviderError("토큰 갱신이 잠시 제한되었습니다(429). \(snippet)", "Token refresh is rate-limited (429). \(snippet)")
-                : ProviderError("토큰 갱신 실패 (HTTP \(status)). \(snippet)", "Token refresh failed (HTTP \(status)). \(snippet)",
-                                needsLogin: status == 400 || status == 401)
+            let err: ProviderError
+            if status == 400 || status == 401 {
+                // invalid_grant: the refresh token is expired or revoked — only a new CLI login fixes it.
+                err = Self.reloginError()
+            } else if status == 429 {
+                err = ProviderError("토큰 갱신이 잠시 제한되었습니다(429). \(snippet)", "Token refresh is rate-limited (429). \(snippet)")
+            } else {
+                err = ProviderError("토큰 갱신 실패 (HTTP \(status)). \(snippet)", "Token refresh failed (HTTP \(status)). \(snippet)")
+            }
             lastRefreshError = err
-            // Back off so a stuck refresh does not get hammered every poll.
             refreshBlockedUntil = Date().addingTimeInterval(status == 429 ? 15 * 60 : 5 * 60)
             throw err
         }
         lastRefreshError = nil
         refreshBlockedUntil = .distantPast
-
         var next = creds
         next.accessToken = access
         if let r = j["refresh_token"] as? String { next.refreshToken = r }
         next.expiresAtMs = (Date().timeIntervalSince1970 + ((j["expires_in"] as? Double) ?? 3600)) * 1000
-
-        try await Task.detached(priority: .utility) {
-            switch source {
-            case .own:
-                var json = Self.loadOwnJSON() ?? [:]
-                json = next.merged(into: json)
-                try Self.saveOwn(json)
-            case .cli:
-                // Write the rotated tokens back so Claude Code CLI keeps working.
-                guard var full = Self.loadCLIJSON(), let o = full["claudeAiOauth"] as? [String: Any] else {
-                    throw ProviderError("Claude Code 키체인 항목을 다시 읽을 수 없어 갱신 토큰을 저장하지 못했습니다.",
-                                        "Could not re-read the Claude Code Keychain item; the refreshed token was not saved.")
-                }
-                full["claudeAiOauth"] = next.merged(into: o)
-                let data = try JSONSerialization.data(withJSONObject: full, options: [.sortedKeys])
-                guard Keychain.write(service: Self.cliService, account: NSUserName(), value: String(decoding: data, as: UTF8.self)) else {
-                    throw ProviderError("Claude Code 키체인 항목 쓰기 실패.", "Failed to write the Claude Code Keychain item.")
-                }
-            case .cliFile:
-                guard var full = Self.loadCLIFileJSON(), let o = full["claudeAiOauth"] as? [String: Any] else {
-                    throw ProviderError("Claude Code 자격증명 파일을 다시 읽을 수 없어 갱신 토큰을 저장하지 못했습니다.",
-                                        "Could not re-read the Claude Code credentials file; the refreshed token was not saved.")
-                }
-                full["claudeAiOauth"] = next.merged(into: o)
-                let data = try JSONSerialization.data(withJSONObject: full, options: [.sortedKeys])
-                try data.write(to: Self.cliCredentialsFile, options: .atomic)
-                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.cliCredentialsFile.path)
-            }
-        }.value
+        if let s = j["scope"] as? String, !s.isEmpty { next.scopes = s.split(separator: " ").map(String.init) }
         return next
-    }
-
-    private static func loadCLIFileJSON() -> [String: Any]? {
-        guard let d = try? Data(contentsOf: cliCredentialsFile) else { return nil }
-        return HTTP.json(d)
-    }
-
-    private static func loadOwnJSON() -> [String: Any]? {
-        guard let s = Keychain.read(service: ownService, account: ownAccount), let d = s.data(using: .utf8) else { return nil }
-        return HTTP.json(d)
-    }
-
-    private static func loadCLIJSON() -> [String: Any]? {
-        guard let s = Keychain.read(service: cliService), let d = s.data(using: .utf8) else { return nil }
-        return HTTP.json(d)
-    }
-
-    private static func saveOwn(_ json: [String: Any]) throws {
-        let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
-        guard Keychain.write(service: ownService, account: ownAccount, value: String(decoding: data, as: UTF8.self)) else {
-            throw ProviderError("키체인 저장 실패.", "Failed to save to the Keychain.")
-        }
     }
 
     // MARK: - HTTP
@@ -413,22 +285,35 @@ final class ClaudeProvider {
     }
 }
 
-extension Data {
-    func base64URL() -> String {
-        base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-}
+/// proper-lockfile compatible lock: the lock is a directory; a holder older than
+/// `stale` seconds is considered abandoned. Matches Claude Code's settings
+/// (stale: 10 s) so both sides respect each other.
+final class RefreshLock {
+    private let url: URL
+    private init(url: URL) { self.url = url }
 
-
-extension ClaudeProvider.Source {
-    var title: String {
-        switch self {
-        case .cli: return L.s("Claude Code CLI 로그인 (키체인)", "Claude Code CLI login (Keychain)")
-        case .cliFile: return L.s("Claude Code CLI 로그인 (~/.claude/.credentials.json)", "Claude Code CLI login (~/.claude/.credentials.json)")
-        case .own: return L.s("앱 전용 토큰", "App-specific token")
+    static func acquire(_ url: URL, stale: TimeInterval = 10, wait: TimeInterval = 8) throws -> RefreshLock {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let deadline = Date().addingTimeInterval(wait)
+        while true {
+            do {
+                try fm.createDirectory(at: url, withIntermediateDirectories: false)
+                return RefreshLock(url: url)
+            } catch {
+                let mtime = (try? fm.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? .distantPast
+                if Date().timeIntervalSince(mtime) > stale {
+                    try? fm.removeItem(at: url)          // abandoned by a crashed holder
+                    continue
+                }
+                if Date() > deadline {
+                    throw ProviderError("다른 프로세스가 Claude 토큰을 갱신 중입니다. 잠시 후 다시 시도합니다.",
+                                        "Another process is refreshing the Claude token. Retrying shortly.")
+                }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
         }
     }
+
+    func release() { try? FileManager.default.removeItem(at: url) }
 }

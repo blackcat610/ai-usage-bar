@@ -62,10 +62,11 @@ public OAuth client (the same client id the CLIs use) and **writes the rotated t
 same place**, exactly like the CLIs do themselves, so your CLI logins keep working. If a refresh
 is rate-limited (429) the app backs off for 15 minutes and keeps showing the last values.
 
-**App-specific Claude login.** If you never use the Claude Code CLI (desktop app only), the popover's
-*Sign-in settings…* opens a small window for a one-time PKCE login: approve in the browser, paste the
-code. The token is stored in the app's own Keychain item (`AIUsageBar / claude-oauth`). The same
-window lets you pick which credential to use (automatic, CLI Keychain, CLI file, or the app token).
+**No login of its own.** The app never asks you to sign in or paste a token. If the Claude Code
+login has expired (its refresh token was revoked or expired), the menu bar shows `!` and the popover
+says so — run `claude` in a terminal and sign in again; the app picks the new login up on its next
+poll. Token refreshes are done under Claude Code's own refresh lock (`~/.claude/.oauth_refresh.lock`)
+so the app and the CLI never race each other.
 
 Nothing leaves your machine except the requests to Anthropic and OpenAI above. There is no
 telemetry.
@@ -76,8 +77,7 @@ telemetry.
   may change or stop working without notice, and using them may sit in a grey area of the
   providers' terms. Use at your own risk.
 - The Claude token refresh touches your Claude Code login (rotated tokens are written back). This
-  mirrors what Claude Code does on its own, but if you are uneasy about it, use the app-specific
-  login instead.
+  mirrors what Claude Code does on its own, using the same lock file.
 - Keychain access goes through `/usr/bin/security`, so reading the Claude Code item does not prompt.
   The secret briefly appears in the `security` process's arguments when writing (same as Claude Code).
 
@@ -96,9 +96,9 @@ Sources/AIUsageBar/
   AppDelegate.swift    NSStatusItem, popover, outside-click dismissal, tooltip
   BatteryIcon.swift    Settings, brand colors, battery gauge drawing, StatusView (1/2-row menu bar view)
   UsageStore.swift     @MainActor state, 5-min polling, 30-s tick
-  ClaudeProvider.swift token sources (app → Keychain → file), refresh + write-back, PKCE login, parsing
+  ClaudeProvider.swift Claude Code credentials (Keychain → file), locked refresh + write-back, parsing
   CodexProvider.swift  auth.json, refresh + write-back, parsing
-  Views.swift          SwiftUI popover
+  Views.swift          SwiftUI popover (windows, errors, display options)
   Models.swift / Formatting.swift / L10n.swift / Shell.swift
 ```
 

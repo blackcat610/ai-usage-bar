@@ -3,7 +3,7 @@ import SwiftUI
 import Combine
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private let statusView = StatusView(frame: .zero)
     private let popover = NSPopover()
@@ -11,7 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var cancellables = Set<AnyCancellable>()
     private var outsideClickMonitor: Any?
     private var lastToggle = Date.distantPast
-    private var loginWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -24,8 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             button.attributedTitle = NSAttributedString(string: "…")
         }
 
-        let root = PopoverView(store: store, quit: { NSApp.terminate(nil) },
-                               openClaudeLogin: { [weak self] in self?.showClaudeLogin() })
+        let root = PopoverView(store: store, quit: { NSApp.terminate(nil) })
         let host = NSHostingController(rootView: root)
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
@@ -93,31 +91,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
     }
 
-    /// The login needs a browser round-trip, which deactivates the app and closes the
-    /// transient popover — so it lives in its own small window instead.
-    private func showClaudeLogin() {
-        closePopover()
-        if let w = loginWindow {
-            w.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let view = ClaudeLoginView(provider: store.claudeProvider,
-                                   done: { [weak self] in self?.store.refresh() },
-                                   close: { [weak self] in self?.loginWindow?.close() })
-        let host = NSHostingController(rootView: view)
-        let w = NSWindow(contentViewController: host)
-        w.title = L.s("Claude 인증 설정", "Claude sign-in settings")
-        w.styleMask = [.titled, .closable]
-        w.isReleasedWhenClosed = false
-        w.level = .floating
-        w.center()
-        w.delegate = self
-        loginWindow = w
-        w.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     private func closePopover() {
         popover.performClose(nil)
         removeOutsideClickMonitor()
@@ -142,10 +115,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func popoverDidClose(_ notification: Notification) {
         removeOutsideClickMonitor()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        if (notification.object as? NSWindow) === loginWindow { loginWindow = nil }
     }
 
     private func showContextMenu() {
@@ -189,8 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     static func row(glyph: NSImage, state: ProviderState) -> StatusView.Row {
         let h = state.snapshot?.headline
         let countdown = h?.resetsAt.map { Fmt.countdownShort(to: $0) }
-        return .init(glyph: glyph, remaining: h?.remainingPercent,
-                     error: state.errorMessage != nil, countdown: countdown)
+        let attention = state.needsLogin || (state.errorMessage != nil && state.snapshot == nil)
+        return .init(glyph: glyph, remaining: attention && state.needsLogin ? nil : h?.remainingPercent,
+                     error: attention, countdown: countdown)
     }
 
     private static func tooltip(claude: ProviderState, codex: ProviderState) -> String {

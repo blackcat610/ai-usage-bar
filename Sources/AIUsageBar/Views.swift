@@ -5,7 +5,6 @@ import ServiceManagement
 struct PopoverView: View {
     @ObservedObject var store: UsageStore
     var quit: () -> Void
-    var openClaudeLogin: () -> Void
 
     @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @State private var launchError: String?
@@ -20,11 +19,11 @@ struct PopoverView: View {
             }
             ProviderSection(name: "Claude", state: store.claude, tick: store.tick,
                             enabled: Binding(get: { Settings.showClaude }, set: { Settings.showClaude = $0; providerToggled() }),
-                            loginAction: openClaudeLogin)
+                            retry: { store.refresh() })
             Divider()
             ProviderSection(name: "Codex", state: store.codex, tick: store.tick,
                             enabled: Binding(get: { Settings.showCodex }, set: { Settings.showCodex = $0; providerToggled() }),
-                            loginAction: nil)
+                            retry: { store.refresh() })
             Divider()
             footer
         }
@@ -97,7 +96,7 @@ struct ProviderSection: View {
     let state: ProviderState
     let tick: Int
     @Binding var enabled: Bool
-    let loginAction: (() -> Void)?
+    let retry: () -> Void
 
     private var brand: Color { Color(nsColor: name == "Claude" ? Brand.claude : Brand.codex) }
     private var symbol: String { name == "Claude" ? "asterisk" : "chevron.left.forwardslash.chevron.right" }
@@ -143,20 +142,15 @@ struct ProviderSection: View {
             }
             if enabled, let err = state.errorMessage {
                 HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Image(systemName: state.needsLogin ? "person.crop.circle.badge.exclamationmark" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(state.needsLogin ? .red : .orange)
                     Text(err).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                     Spacer(minLength: 0)
-                    if state.needsLogin, let loginAction {
-                        Button(L.s("인증 설정…", "Sign-in settings…"), action: loginAction).controlSize(.small)
+                    if state.needsLogin {
+                        Button(L.s("다시 확인", "Check again"), action: retry).controlSize(.small)
                     }
-                }
-            } else if enabled, let loginAction, name == "Claude" {
-                // Always reachable, so the user can switch to the app's own login.
-                HStack {
-                    Spacer()
-                    Button(L.s("인증 설정…", "Sign-in settings…"), action: loginAction)
-                        .buttonStyle(.plain).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
         }
@@ -199,135 +193,6 @@ struct WindowRow: View {
                     .foregroundStyle(.secondary)
                     .padding(.leading, 168)
             }
-        }
-    }
-}
-
-struct ClaudeLoginView: View {
-    let provider: ClaudeProvider
-    var done: () -> Void
-    var close: () -> Void
-
-    /// Seed for previews (the live window probes in `onAppear`).
-    var initialSources: [ClaudeProvider.SourceInfo] = []
-
-    @State private var probed: [ClaudeProvider.SourceInfo] = []
-    @State private var selection: String = Settings.claudeSource
-    @State private var code = ""
-    @State private var busy = false
-    @State private var message: String?
-    @State private var isError = false
-
-    private var sources: [ClaudeProvider.SourceInfo] { probed.isEmpty ? initialSources : probed }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Source picker
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L.s("사용할 Claude 인증", "Claude credential to use")).font(.headline)
-                Picker("", selection: $selection) {
-                    Text(L.s("자동 — 사용 가능한 것 중 Claude Code CLI 우선", "Automatic — prefer the Claude Code CLI login")).tag("auto")
-                    ForEach(sources) { info in
-                        HStack(spacing: 6) {
-                            Text(info.source.title)
-                            Text("· " + info.detail).foregroundStyle(info.available ? .secondary : .tertiary)
-                        }
-                        .tag(info.source.rawValue)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
-                .onChange(of: selection) { _, v in
-                    Settings.claudeSource = v
-                    Settings.notify()
-                    done()   // re-fetch with the chosen source
-                }
-                Text(L.s("CLI 로그인이 있으면 별도 설정 없이 그것을 쓰는 것이 가장 간단합니다. 만료된 토큰은 사용 시 자동 갱신되어 같은 자리에 저장됩니다.",
-                         "If a CLI login exists, using it needs no setup. Expired tokens are refreshed on use and stored back in place."))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-
-            // App-specific login
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L.s("앱 전용 토큰 로그인", "App-specific token sign-in")).font(.headline)
-                Text(L.s("Claude Code CLI 로그인이 없을 때 쓰는 방법입니다. 1) 브라우저에서 승인 → 2) 표시된 코드를 붙여넣기 → 3) 연결. (\"Claude Code에 붙여넣으세요\"라고 나와도 여기에 넣으면 됩니다.)",
-                         "For when there is no Claude Code CLI login. 1) Approve in the browser → 2) paste the code shown → 3) Connect. (Paste it here even if the page says to paste it into Claude Code.)"))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Button(L.s("1. 브라우저에서 로그인", "1. Sign in in browser")) {
-                        NSWorkspace.shared.open(provider.beginLogin())
-                        message = nil
-                    }
-                    if sources.first(where: { $0.source == .own })?.available == true {
-                        Button(L.s("앱 전용 토큰 삭제", "Remove app token")) {
-                            provider.forgetOwnLogin()
-                            isError = false
-                            message = L.s("앱 전용 토큰을 삭제했습니다.", "App token removed.")
-                            if selection == "own" { selection = "auto" }
-                            reload()
-                            done()
-                        }
-                    }
-                }
-                HStack {
-                    TextField(L.s("2. 인증 코드 붙여넣기", "2. Paste the authorization code"), text: $code)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(submit)
-                    Button(L.s("3. 연결", "3. Connect"), action: submit)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            HStack(alignment: .top) {
-                if busy { ProgressView().controlSize(.small) }
-                if let m = message {
-                    Text(m).font(.caption).foregroundStyle(isError ? .red : .secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Spacer()
-                Button(L.s("닫기", "Close"), action: close)
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(16)
-        .frame(width: 520)
-        .onAppear(perform: reload)
-    }
-
-    private func reload() {
-        Task.detached(priority: .userInitiated) {
-            let result = ClaudeProvider.probeSources()
-            await MainActor.run { probed = result }
-        }
-    }
-
-    private func submit() {
-        guard !busy else { return }
-        busy = true
-        message = nil
-        let pasted = code
-        Task {
-            do {
-                try await provider.completeLogin(pasted: pasted)
-                isError = false
-                message = L.s("연결되었습니다. 앱 전용 토큰이 저장되었습니다.", "Connected. The app-specific token is saved.")
-                code = ""
-                reload()
-                done()
-            } catch let e as ProviderError {
-                isError = true
-                message = e.text.s
-            } catch {
-                isError = true
-                message = error.localizedDescription
-            }
-            busy = false
         }
     }
 }
